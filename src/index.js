@@ -385,22 +385,52 @@ async function pipeStream(targetUrl, request, filename, asAttachment) {
   });
 }
 
+function isDirectMediaUrl(urlStr) {
+  if (!urlStr || typeof urlStr !== "string") return false;
+  try {
+    const parsed = new URL(urlStr);
+    const host = parsed.hostname.toLowerCase();
+    const pathname = parsed.pathname.toLowerCase();
+
+    if (/\.(mp4|m4a|mp3|jpg|jpeg|png|webp|webm)(\?|$)/i.test(urlStr) || /\.(mp4|m4a|mp3|jpg|jpeg|png|webp|webm)$/i.test(pathname)) {
+      return true;
+    }
+    if (host.includes("cdninstagram.com") || host.includes("fbcdn.net") || host.includes("akamaihd.net")) {
+      return true;
+    }
+    if (parsed.searchParams.has("bytestart") || parsed.searchParams.has("efg") || parsed.searchParams.has("_nc_ht") || parsed.searchParams.has("_nc_cat") || parsed.searchParams.has("oh")) {
+      return true;
+    }
+    if (/^\/(?:p|reel|reels|tv|stories|share)\//i.test(pathname)) {
+      return false;
+    }
+    return host !== "instagram.com" && host !== "www.instagram.com";
+  } catch {
+    return false;
+  }
+}
+
 async function handleProxy(request, asAttachment) {
   const reqUrl = new URL(request.url);
-  const targetUrl = reqUrl.searchParams.get("url");
-  const customFilename = reqUrl.searchParams.get("filename");
+  const rawUrl = reqUrl.searchParams.get("url");
+  const rawId = reqUrl.searchParams.get("id");
+  const customFilename = reqUrl.searchParams.get("filename") || reqUrl.searchParams.get("amp;filename");
 
+  const targetUrl = cleanMediaUrl(rawUrl) || (rawId ? `https://www.instagram.com/reel/${rawId}/` : null);
   if (!targetUrl) {
-    return json({ status: "error", message: "Missing 'url' query parameter" }, 400);
+    return json({ status: "error", message: "Missing 'url' or 'id' query parameter" }, 400);
   }
 
   try {
-    const parsed = new URL(targetUrl);
-    const isDirectMedia = !parsed.hostname.includes("instagram.com");
+    const isDirect = isDirectMediaUrl(targetUrl);
 
-    if (isDirectMedia) {
-      const filename = sanitizeFilename(customFilename || (parsed.pathname.endsWith(".mp4") ? "instagram_video.mp4" : "instagram_media"));
-      return await pipeStream(parsed.toString(), request, filename, asAttachment);
+    if (isDirect) {
+      const parsed = new URL(targetUrl);
+      const isAudio = parsed.pathname.endsWith(".m4a") || parsed.pathname.endsWith(".mp3") || (customFilename && (customFilename.endsWith(".m4a") || customFilename.endsWith(".mp3")));
+      const isImg = parsed.pathname.endsWith(".jpg") || parsed.pathname.endsWith(".jpeg") || parsed.pathname.endsWith(".png") || parsed.pathname.endsWith(".webp");
+      const defaultName = isAudio ? "instagram_audio.m4a" : (isImg ? "instagram_image.jpg" : "instagram_video.mp4");
+      const filename = sanitizeFilename(customFilename || defaultName);
+      return await pipeStream(targetUrl, request, filename, asAttachment);
     }
 
     const data = await scrapeInstagram(targetUrl, reqUrl.origin);
